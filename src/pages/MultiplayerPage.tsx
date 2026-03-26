@@ -8,6 +8,7 @@ import { createDeckFromCards } from '../utils/formatCard';
 import { useMultiplayer, isApplyingRemote } from '../hooks/useMultiplayer';
 import { useToast } from '../components/ui/Toast';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import type { PokemonTCGCard } from '../types/card';
 
 export function MultiplayerPage() {
   const startGame = useGameStore(s => s.startGame);
@@ -20,7 +21,7 @@ export function MultiplayerPage() {
   const { toast } = useToast();
 
   const mp = useMultiplayer();
-  const [phase, setPhase] = useState<'lobby' | 'waiting' | 'deck_select' | 'playing'>('lobby');
+  const [phase, setPhase] = useState<'lobby' | 'waiting' | 'deck_select' | 'waiting_opponent' | 'playing'>('lobby');
   const [joinCode, setJoinCode] = useState('');
   const [selectedDeck, setSelectedDeck] = useState('');
   const [showLog, setShowLog] = useState(false);
@@ -30,11 +31,13 @@ export function MultiplayerPage() {
 
   useEffect(() => { loadFromStorage(); }, [loadFromStorage]);
 
+  // Conectar ao servidor
   useEffect(() => {
     mp.connect();
     return () => mp.disconnect();
   }, []);
 
+  // Quando oponente entrar na sala, ir para deck_select
   useEffect(() => {
     if (mp.opponentConnected && phase === 'waiting') {
       setPhase('deck_select');
@@ -42,12 +45,51 @@ export function MultiplayerPage() {
     }
   }, [mp.opponentConnected, phase, toast]);
 
-  // Auto-sync: sempre que o state mudar localmente, sincroniza com o oponente (debounced)
+  // ── Callback: ambos prontos — iniciar jogo com decks corretos ──
+  useEffect(() => {
+    mp.onBothReady((rawDecks: [unknown[], unknown[]]) => {
+      const deck0Cards = rawDecks[0] as PokemonTCGCard[];
+      const deck1Cards = rawDecks[1] as PokemonTCGCard[];
+
+      const deck0 = createDeckFromCards(deck0Cards);
+      const deck1 = createDeckFromCards(deck1Cards);
+
+      // Iniciar jogo com os decks corretos (player 0 = host, player 1 = joiner)
+      startGame(deck0, deck1, 'online');
+      setupPrizes(0); setupPrizes(1);
+      drawCard(0, 7); drawCard(1, 7);
+      startTurn();
+
+      // Host sincroniza o state oficial
+      if (mp.playerIndex === 0) {
+        setTimeout(() => mp.syncState(), 200);
+      }
+
+      setPhase('playing');
+      toast('Jogo online iniciado!', 'success');
+    });
+  }, [mp, startGame, setupPrizes, drawCard, startTurn, toast]);
+
+  // ── Callback: restauração após reconexão ──
+  useEffect(() => {
+    mp.onRestored((hadState: boolean) => {
+      if (hadState) {
+        // Tinha partida em andamento — voltar direto para playing
+        setPhase('playing');
+        toast('Reconectado! Partida restaurada.', 'success');
+      } else {
+        // Sala existe mas sem partida — voltar para deck_select
+        setPhase('deck_select');
+        toast('Reconectado à sala!', 'success');
+      }
+    });
+  }, [mp, toast]);
+
+  // ── Auto-sync: quando state muda localmente, enviar para oponente ──
   useEffect(() => {
     if (phase !== 'playing') return;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const unsub = useGameStore.subscribe(() => {
-      // Ignorar mudanças causadas por sync remoto (evita loop)
       if (isApplyingRemote()) return;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => mp.syncState(), 100);
@@ -59,6 +101,15 @@ export function MultiplayerPage() {
       syncUnsubRef.current = null;
     };
   }, [phase, mp]);
+
+  // ── Quando oponente reconecta durante partida, reenviar state ──
+  useEffect(() => {
+    if (phase === 'playing' && mp.opponentConnected) {
+      // Pequeno delay para garantir que o oponente está pronto
+      const timer = setTimeout(() => mp.syncState(), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [mp.opponentConnected, phase, mp]);
 
   const handleCreateRoom = () => {
     mp.createRoom();
@@ -75,26 +126,14 @@ export function MultiplayerPage() {
     }
   };
 
-  const handleStartOnline = () => {
+  const handleSubmitDeck = () => {
     const deckData = decks.find(d => d.id === selectedDeck);
     if (!deckData) { toast('Selecione um deck!', 'error'); return; }
 
-    const cards = createDeckFromCards(deckData.cards);
-    const cards2 = createDeckFromCards(deckData.cards);
-
-    // Ambos criam o jogo — host (0) é quem manda o state oficial
-    startGame(cards, cards2, 'online');
-    setupPrizes(0); setupPrizes(1);
-    drawCard(0, 7); drawCard(1, 7);
-    startTurn();
-
-    if (mp.playerIndex === 0) {
-      // Host sincroniza o state completo para o joiner
-      setTimeout(() => mp.syncState(), 200);
-    }
-
-    setPhase('playing');
-    toast('Jogo online iniciado!', 'success');
+    // Enviar cartas RAW (PokemonTCGCard[]) para o servidor
+    mp.submitDeck(deckData.cards);
+    setPhase('waiting_opponent');
+    toast('Deck enviado! Aguardando oponente...', 'success');
   };
 
   // === LOBBY ===
@@ -103,7 +142,7 @@ export function MultiplayerPage() {
       <div className="flex min-h-[calc(100vh-60px)] flex-col items-center justify-center gap-8 px-4">
         <h2 className="text-2xl font-bold text-text-primary">Multiplayer</h2>
         <p className="text-sm text-text-secondary">
-          {mp.connected ? 'Conectado ao servidor' : 'Conectando...'}
+          {mp.reconnecting ? 'Reconectando...' : mp.connected ? 'Conectado ao servidor' : 'Conectando...'}
         </p>
 
         <div className="flex w-full max-w-sm flex-col gap-4">
@@ -128,7 +167,7 @@ export function MultiplayerPage() {
     );
   }
 
-  // === WAITING ===
+  // === WAITING (host aguardando oponente) ===
   if (phase === 'waiting') {
     return (
       <div className="flex min-h-[calc(100vh-60px)] flex-col items-center justify-center gap-6 px-4">
@@ -157,10 +196,23 @@ export function MultiplayerPage() {
             <option value="">Selecionar deck...</option>
             {decks.map(d => <option key={d.id} value={d.id}>{d.name} ({d.cards.length})</option>)}
           </select>
-          <button onClick={handleStartOnline} disabled={!selectedDeck}
+          <button onClick={handleSubmitDeck} disabled={!selectedDeck}
             className="w-full rounded-xl bg-accent-green px-6 py-4 text-lg font-bold text-bg-primary active:scale-95 disabled:opacity-30">
             Pronto!
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // === WAITING FOR OPPONENT DECK ===
+  if (phase === 'waiting_opponent') {
+    return (
+      <div className="flex min-h-[calc(100vh-60px)] flex-col items-center justify-center gap-6 px-4">
+        <h2 className="text-2xl font-bold text-text-primary">Deck Enviado!</h2>
+        <div className="flex items-center gap-2">
+          <div className="h-3 w-3 animate-pulse rounded-full bg-accent-blue" />
+          <span className="text-sm text-text-secondary">Aguardando oponente escolher deck...</span>
         </div>
       </div>
     );
@@ -176,7 +228,7 @@ export function MultiplayerPage() {
             {mp.roomId}
           </span>
           <span className={`rounded px-1.5 py-0.5 text-[8px] font-bold sm:px-2 sm:text-[10px] ${mp.opponentConnected ? 'bg-accent-green/20 text-accent-green' : 'bg-accent-red/20 text-accent-red'}`}>
-            {mp.opponentConnected ? 'Online' : 'Offline'}
+            {mp.opponentConnected ? 'Online' : mp.reconnecting ? 'Reconectando...' : 'Offline'}
           </span>
         </div>
         <div className="flex items-center gap-1 sm:gap-1.5">
@@ -207,6 +259,14 @@ export function MultiplayerPage() {
           </span>
         )}
       </div>
+
+      {/* Indicador de reconexão */}
+      {(!mp.connected || mp.reconnecting) && (
+        <div className="mb-2 flex items-center justify-center gap-2 rounded-lg bg-accent-gold/20 px-3 py-2">
+          <div className="h-2 w-2 animate-pulse rounded-full bg-accent-gold" />
+          <span className="text-xs font-medium text-accent-gold">Reconectando ao servidor...</span>
+        </div>
+      )}
 
       {/* Board com perspectiva: seu campo sempre embaixo */}
       <GameBoard perspective={mp.playerIndex} />
