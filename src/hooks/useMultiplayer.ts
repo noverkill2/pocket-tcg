@@ -228,7 +228,15 @@ export function useMultiplayer() {
     s.emit('chat_message', { roomId: r, message, playerName });
   }, []);
 
-  // ── Desconectar ──
+  // ── Voltar ao lobby (mantém conexão e sala viva) ──
+  const leaveToLobby = useCallback(() => {
+    setRoomId(null);
+    setOpponentConnected(false);
+    // NÃO desconecta o socket, NÃO remove do sessionStorage
+    // A sala continua viva no servidor e o jogador pode reentrar
+  }, []);
+
+  // ── Desconectar de verdade (sair do jogo) ──
   const disconnect = useCallback(() => {
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -260,7 +268,7 @@ export function useMultiplayer() {
   }, []);
 
   return {
-    connect, disconnect,
+    connect, disconnect, leaveToLobby,
     connected, reconnecting,
     createRoom, joinRoom,
     roomId, playerIndex,

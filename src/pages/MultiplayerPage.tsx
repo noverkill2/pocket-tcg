@@ -331,7 +331,7 @@ export function MultiplayerPage() {
           <div className="h-3 w-3 animate-pulse rounded-full bg-accent-gold" />
           <span className="text-sm text-text-secondary">Aguardando oponente...</span>
         </div>
-        <button onClick={() => { mp.disconnect(); setPhase('lobby'); }}
+        <button onClick={() => { mp.leaveToLobby(); setPhase('lobby'); }}
           className="rounded-lg bg-bg-section px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
           Voltar ao Lobby
         </button>
@@ -356,6 +356,10 @@ export function MultiplayerPage() {
             Pronto!
           </button>
         </div>
+        <button onClick={() => { mp.leaveToLobby(); setPhase('lobby'); }}
+          className="rounded-lg bg-bg-section px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+          Voltar ao Lobby
+        </button>
       </div>
     );
   }
@@ -369,6 +373,10 @@ export function MultiplayerPage() {
           <div className="h-3 w-3 animate-pulse rounded-full bg-accent-blue" />
           <span className="text-sm text-text-secondary">Aguardando oponente escolher deck...</span>
         </div>
+        <button onClick={() => { mp.leaveToLobby(); setPhase('lobby'); }}
+          className="rounded-lg bg-bg-section px-4 py-2 text-sm text-text-secondary hover:text-text-primary">
+          Voltar ao Lobby
+        </button>
       </div>
     );
   }
