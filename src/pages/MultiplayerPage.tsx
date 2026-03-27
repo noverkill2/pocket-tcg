@@ -22,7 +22,16 @@ export function MultiplayerPage() {
   const { toast } = useToast();
 
   const mp = useMultiplayer();
-  const [phase, setPhase] = useState<'lobby' | 'waiting' | 'deck_select' | 'waiting_opponent' | 'playing'>('lobby');
+  const gamePhase = useGameStore(s => s.gamePhase);
+
+  // Se já tem sala e partida em andamento, voltar direto pro jogo
+  const getInitialPhase = () => {
+    if (mp.roomId && gamePhase === 'playing') return 'playing' as const;
+    if (mp.roomId && mp.opponentConnected) return 'deck_select' as const;
+    if (mp.roomId) return 'waiting' as const;
+    return 'lobby' as const;
+  };
+  const [phase, setPhase] = useState<'lobby' | 'waiting' | 'deck_select' | 'waiting_opponent' | 'playing'>(getInitialPhase);
   const [selectedDeck, setSelectedDeck] = useState('');
   const [showLog, setShowLog] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -44,10 +53,9 @@ export function MultiplayerPage() {
     if (playerName) localStorage.setItem('pocket-tcg-player-name', playerName);
   }, [playerName]);
 
-  // Conectar ao servidor (disconnect já emite leave_room antes de fechar)
+  // Conectar ao servidor (Provider mantém conexão viva entre páginas)
   useEffect(() => {
     mp.connect();
-    return () => mp.disconnect();
   }, []);
 
   // Quando oponente entrar na sala (host)

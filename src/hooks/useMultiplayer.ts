@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, createContext, useContext, type ReactNode } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useGameStore } from '../store/gameStore';
 
@@ -48,9 +48,40 @@ function markApplyingRemote() {
   }, 100);
 }
 
-// ── Hook principal ──
+// ── Tipo do contexto ──
+interface MultiplayerContextValue {
+  connect: () => void;
+  disconnect: () => void;
+  leaveToLobby: () => void;
+  connected: boolean;
+  reconnecting: boolean;
+  createRoom: (roomName: string, password: string, playerName: string) => void;
+  joinRoom: (code: string, password: string, playerName: string) => Promise<{ success: boolean; error?: string; opponentOnline: boolean }>;
+  roomId: string | null;
+  playerIndex: 0 | 1;
+  opponentConnected: boolean;
+  roomList: RoomInfo[];
+  refreshRooms: () => void;
+  submitDeck: (deckCards: unknown[]) => void;
+  syncState: () => void;
+  chatMessages: ChatMessage[];
+  sendChat: (message: string, playerName: string) => void;
+  onBothReady: (cb: (decks: [unknown[], unknown[]]) => void) => void;
+  onRestored: (cb: (hadState: boolean) => void) => void;
+  onPlayerJoined: (cb: (data: { playerName: string }) => void) => void;
+}
 
+const MultiplayerContext = createContext<MultiplayerContextValue | null>(null);
+
+// ── Hook público ──
 export function useMultiplayer() {
+  const ctx = useContext(MultiplayerContext);
+  if (!ctx) throw new Error('useMultiplayer must be used within MultiplayerProvider');
+  return ctx;
+}
+
+// ── Provider (vive no App, nunca desmonta) ──
+export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [roomId, setRoomId] = useState<string | null>(null);
   const [playerIndex, setPlayerIndex] = useState<0 | 1>(0);
@@ -118,7 +149,6 @@ export function useMultiplayer() {
       setReconnecting(true);
     });
 
-    // Lista de salas em tempo real
     s.on('room_list', (list: RoomInfo[]) => {
       setRoomList(list);
     });
@@ -155,7 +185,6 @@ export function useMultiplayer() {
     });
 
     socketRef.current = s;
-    return s;
   }, []);
 
   // ── Criar sala ──
@@ -195,7 +224,7 @@ export function useMultiplayer() {
     });
   }, []);
 
-  // ── Pedir lista atualizada ──
+  // ── Pedir lista ──
   const refreshRooms = useCallback(() => {
     const s = socketRef.current;
     if (!s) return;
@@ -229,7 +258,7 @@ export function useMultiplayer() {
     s.emit('chat_message', { roomId: r, message, playerName });
   }, []);
 
-  // ── Voltar ao lobby (sai da sala mas mantém conexão) ──
+  // ── Voltar ao lobby ──
   const leaveToLobby = useCallback(() => {
     const s = socketRef.current;
     const r = roomIdRef.current;
@@ -241,11 +270,10 @@ export function useMultiplayer() {
     localStorage.removeItem('pocket-tcg-room-id');
   }, []);
 
-  // ── Desconectar de verdade (sair do jogo) ──
+  // ── Desconectar de verdade ──
   const disconnect = useCallback(() => {
     const s = socketRef.current;
     const r = roomIdRef.current;
-    // Liberar slot no servidor antes de desconectar
     if (s && r) {
       s.emit('leave_room', { roomId: r });
     }
@@ -256,13 +284,6 @@ export function useMultiplayer() {
     setOpponentConnected(false);
     setReconnecting(false);
     localStorage.removeItem('pocket-tcg-room-id');
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      socketRef.current?.disconnect();
-      socketRef.current = null;
-    };
   }, []);
 
   // ── Callbacks ──
@@ -278,7 +299,7 @@ export function useMultiplayer() {
     onPlayerJoinedRef.current = cb;
   }, []);
 
-  return {
+  const value: MultiplayerContextValue = {
     connect, disconnect, leaveToLobby,
     connected, reconnecting,
     createRoom, joinRoom,
@@ -290,4 +311,6 @@ export function useMultiplayer() {
     chatMessages, sendChat,
     onBothReady, onRestored, onPlayerJoined,
   };
+
+  return <MultiplayerContext.Provider value={value}>{children}</MultiplayerContext.Provider>;
 }

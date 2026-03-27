@@ -5,21 +5,24 @@ import { DeckBuilderPage } from './pages/DeckBuilderPage';
 import { GamePage } from './pages/GamePage';
 import { MultiplayerPage } from './pages/MultiplayerPage';
 import { ToastProvider } from './components/ui/Toast';
+import { MultiplayerProvider } from './hooks/useMultiplayer';
 
 function App() {
   return (
     <ToastProvider>
-      <BrowserRouter>
-        <div className="min-h-screen bg-bg-primary">
-          <Header />
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/deck-builder" element={<DeckBuilderPage />} />
-            <Route path="/game" element={<GamePage />} />
-            <Route path="/multiplayer" element={<MultiplayerPage />} />
-          </Routes>
-        </div>
-      </BrowserRouter>
+      <MultiplayerProvider>
+        <BrowserRouter>
+          <div className="min-h-screen bg-bg-primary">
+            <Header />
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/deck-builder" element={<DeckBuilderPage />} />
+              <Route path="/game" element={<GamePage />} />
+              <Route path="/multiplayer" element={<MultiplayerPage />} />
+            </Routes>
+          </div>
+        </BrowserRouter>
+      </MultiplayerProvider>
     </ToastProvider>
   );
 }
