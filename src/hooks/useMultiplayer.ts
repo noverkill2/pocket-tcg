@@ -21,10 +21,10 @@ export interface RoomInfo {
 
 // ── Player ID persistente ──
 function getPlayerId(): string {
-  let id = sessionStorage.getItem('pocket-tcg-player-id');
+  let id = localStorage.getItem('pocket-tcg-player-id');
   if (!id) {
     id = crypto.randomUUID();
-    sessionStorage.setItem('pocket-tcg-player-id', id);
+    localStorage.setItem('pocket-tcg-player-id', id);
   }
   return id;
 }
@@ -71,7 +71,7 @@ export function useMultiplayer() {
 
   useEffect(() => {
     if (roomId) {
-      sessionStorage.setItem('pocket-tcg-room-id', roomId);
+      localStorage.setItem('pocket-tcg-room-id', roomId);
     }
   }, [roomId]);
 
@@ -94,7 +94,7 @@ export function useMultiplayer() {
       setReconnecting(false);
 
       // Auto-rejoin
-      const savedRoom = sessionStorage.getItem('pocket-tcg-room-id');
+      const savedRoom = localStorage.getItem('pocket-tcg-room-id');
       if (savedRoom && !roomIdRef.current) {
         s.emit('rejoin_room', { playerId: playerIdRef.current }, (res: { success: boolean; roomId?: string; playerIndex?: number; hasState?: boolean }) => {
           if (res.success && res.roomId) {
@@ -103,7 +103,7 @@ export function useMultiplayer() {
             setOpponentConnected(true);
             onRestoredRef.current?.(res.hasState ?? false);
           } else {
-            sessionStorage.removeItem('pocket-tcg-room-id');
+            localStorage.removeItem('pocket-tcg-room-id');
           }
         });
       }
@@ -232,7 +232,7 @@ export function useMultiplayer() {
   const leaveToLobby = useCallback(() => {
     setRoomId(null);
     setOpponentConnected(false);
-    // NÃO desconecta o socket, NÃO remove do sessionStorage
+    // NÃO desconecta o socket, NÃO remove do localStorage
     // A sala continua viva no servidor e o jogador pode reentrar
   }, []);
 
@@ -244,7 +244,7 @@ export function useMultiplayer() {
     setRoomId(null);
     setOpponentConnected(false);
     setReconnecting(false);
-    sessionStorage.removeItem('pocket-tcg-room-id');
+    localStorage.removeItem('pocket-tcg-room-id');
   }, []);
 
   useEffect(() => {
