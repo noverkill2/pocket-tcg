@@ -176,20 +176,21 @@ export function useMultiplayer() {
   // ── Entrar na sala ──
   const joinRoom = useCallback((code: string, password: string, playerName: string) => {
     const s = socketRef.current;
-    if (!s) return Promise.resolve({ success: false, error: 'Não conectado' });
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
+    if (!s) return Promise.resolve({ success: false, error: 'Não conectado', opponentOnline: false });
+    return new Promise<{ success: boolean; error?: string; opponentOnline: boolean }>((resolve) => {
       s.emit('join_room', {
         roomId: code,
         playerId: playerIdRef.current,
         password: password || undefined,
         playerName,
       }, (data: { success: boolean; error?: string; playerIndex?: number; opponentOnline?: boolean }) => {
+        const opponentOnline = data.opponentOnline ?? false;
         if (data.success) {
           setRoomId(code);
           setPlayerIndex((data.playerIndex ?? 1) as 0 | 1);
-          setOpponentConnected(data.opponentOnline ?? false);
+          setOpponentConnected(opponentOnline);
         }
-        resolve(data);
+        resolve({ ...data, opponentOnline });
       });
     });
   }, []);
