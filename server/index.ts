@@ -22,26 +22,27 @@ const io = new Server(httpServer, {
 // ============================================================
 
 interface PlayerSlot {
-  playerId: string;        // ID persistente do jogador (sobrevive reconexão)
-  socketId: string | null; // socket.id atual (null = desconectado)
-  deck: unknown[] | null;  // deck escolhido pelo jogador
-  ready: boolean;          // deck selecionado e pronto
+  playerId: string;
+  socketId: string | null;
+  deck: unknown[] | null;
+  ready: boolean;
+  name: string;
 }
 
 interface Room {
   id: string;
-  players: [PlayerSlot, PlayerSlot | null]; // [host, joiner]
-  state: unknown;                           // último game state sincronizado
+  name: string;
+  password: string | null;       // null = sala aberta
+  hostName: string;
+  players: [PlayerSlot, PlayerSlot | null];
+  state: unknown;
+  status: 'waiting' | 'selecting' | 'playing';
   createdAt: number;
-  destroyTimer: ReturnType<typeof setTimeout> | null; // timer para destruir sala vazia
+  destroyTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const rooms = new Map<string, Room>();
-
-// Tempo para manter sala viva após todos saírem (5 minutos)
 const ROOM_DESTROY_TIMEOUT = 5 * 60 * 1000;
-
-// Mapeamento rápido: playerId → roomId (para reconexão)
 const playerRoomMap = new Map<string, string>();
 
 // ============================================================
@@ -94,17 +95,44 @@ function scheduleRoomDestroy(roomId: string) {
 
   cancelDestroyTimer(room);
   room.destroyTimer = setTimeout(() => {
-    // Só destruir se ainda não tem ninguém online
     const anyOnline = room.players.some(p => isPlayerOnline(p));
     if (!anyOnline) {
-      // Limpar mapeamentos
       for (const p of room.players) {
         if (p) playerRoomMap.delete(p.playerId);
       }
       rooms.delete(roomId);
+      broadcastRoomList();
       console.log(`Room ${roomId} destroyed (timeout)`);
     }
   }, ROOM_DESTROY_TIMEOUT);
+}
+
+// Monta a lista pública de salas (sem senhas, sem state)
+function getRoomList() {
+  const list: {
+    id: string;
+    name: string;
+    hasPassword: boolean;
+    hostName: string;
+    players: number;
+    status: string;
+  }[] = [];
+
+  for (const [id, room] of rooms) {
+    list.push({
+      id,
+      name: room.name,
+      hasPassword: room.password !== null,
+      hostName: room.hostName,
+      players: room.players.filter(p => p !== null).length,
+      status: room.status,
+    });
+  }
+  return list;
+}
+
+function broadcastRoomList() {
+  io.emit('room_list', getRoomList());
 }
 
 // ============================================================
@@ -114,8 +142,16 @@ function scheduleRoomDestroy(roomId: string) {
 io.on('connection', (socket) => {
   console.log(`Socket connected: ${socket.id}`);
 
+  // Enviar lista de salas ao conectar
+  socket.emit('room_list', getRoomList());
+
+  // ── Pedir lista de salas ────────────────────────────────
+  socket.on('list_rooms', (callback: (rooms: ReturnType<typeof getRoomList>) => void) => {
+    callback(getRoomList());
+  });
+
   // ── Criar sala ──────────────────────────────────────────
-  socket.on('create_room', (data: { playerId: string }, callback: (res: { roomId: string }) => void) => {
+  socket.on('create_room', (data: { playerId: string; roomName: string; password?: string; playerName: string }, callback: (res: { roomId: string }) => void) => {
     let roomId = generateRoomCode();
     while (rooms.has(roomId)) roomId = generateRoomCode();
 
@@ -124,12 +160,17 @@ io.on('connection', (socket) => {
       socketId: socket.id,
       deck: null,
       ready: false,
+      name: data.playerName || 'Jogador 1',
     };
 
     const room: Room = {
       id: roomId,
+      name: data.roomName || `Sala ${roomId}`,
+      password: data.password && data.password.trim() !== '' ? data.password.trim() : null,
+      hostName: hostSlot.name,
       players: [hostSlot, null],
       state: null,
+      status: 'waiting',
       createdAt: Date.now(),
       destroyTimer: null,
     };
@@ -138,34 +179,44 @@ io.on('connection', (socket) => {
     playerRoomMap.set(data.playerId, roomId);
     socket.join(roomId);
 
-    console.log(`Room ${roomId} created by ${data.playerId}`);
+    console.log(`Room ${roomId} "${room.name}" created by ${data.playerName}`);
     callback({ roomId });
+    broadcastRoomList();
   });
 
   // ── Entrar na sala ──────────────────────────────────────
-  socket.on('join_room', (data: { roomId: string; playerId: string }, callback: (res: { success: boolean; error?: string; playerIndex?: number }) => void) => {
+  socket.on('join_room', (data: { roomId: string; playerId: string; password?: string; playerName: string }, callback: (res: { success: boolean; error?: string; playerIndex?: number }) => void) => {
     const room = rooms.get(data.roomId);
     if (!room) {
       callback({ success: false, error: 'Sala não encontrada' });
       return;
     }
 
-    // Verificar se o jogador já está na sala (reconexão via join)
+    // Reconexão
     const existing = findPlayerInRoom(room, data.playerId);
     if (existing) {
       existing.slot.socketId = socket.id;
+      existing.slot.name = data.playerName || existing.slot.name;
       socket.join(data.roomId);
       cancelDestroyTimer(room);
       callback({ success: true, playerIndex: existing.index });
       socket.to(data.roomId).emit('player_reconnected', { playerIndex: existing.index });
-      // Enviar state salvo para restaurar
       if (room.state) {
         socket.emit('restore_state', room.state);
       }
+      broadcastRoomList();
       return;
     }
 
-    // Novo jogador
+    // Verificar senha
+    if (room.password !== null) {
+      if (!data.password || data.password !== room.password) {
+        callback({ success: false, error: 'Senha incorreta' });
+        return;
+      }
+    }
+
+    // Sala cheia
     if (room.players[1] !== null) {
       callback({ success: false, error: 'Sala cheia' });
       return;
@@ -176,18 +227,20 @@ io.on('connection', (socket) => {
       socketId: socket.id,
       deck: null,
       ready: false,
+      name: data.playerName || 'Jogador 2',
     };
 
     room.players[1] = joinerSlot;
+    room.status = 'selecting';
     playerRoomMap.set(data.playerId, data.roomId);
     socket.join(data.roomId);
     cancelDestroyTimer(room);
 
-    console.log(`Player ${data.playerId} joined room ${data.roomId}`);
+    console.log(`Player ${data.playerName} joined room ${data.roomId}`);
     callback({ success: true, playerIndex: 1 });
 
-    // Notificar host
-    socket.to(data.roomId).emit('player_joined');
+    socket.to(data.roomId).emit('player_joined', { playerName: joinerSlot.name });
+    broadcastRoomList();
   });
 
   // ── Reconectar à sala ───────────────────────────────────
@@ -212,12 +265,11 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Restaurar conexão
     found.slot.socketId = socket.id;
     socket.join(roomId);
     cancelDestroyTimer(room);
 
-    console.log(`Player ${data.playerId} rejoined room ${roomId}`);
+    console.log(`Player ${found.slot.name} rejoined room ${roomId}`);
     callback({
       success: true,
       roomId,
@@ -225,16 +277,15 @@ io.on('connection', (socket) => {
       hasState: room.state !== null,
     });
 
-    // Enviar state salvo
     if (room.state) {
       socket.emit('restore_state', room.state);
     }
 
-    // Notificar oponente que voltou
     socket.to(roomId).emit('player_reconnected', { playerIndex: found.index });
+    broadcastRoomList();
   });
 
-  // ── Enviar deck (troca de decks) ───────────────────────
+  // ── Enviar deck ─────────────────────────────────────────
   socket.on('submit_deck', (data: { roomId: string; deck: unknown[] }) => {
     const room = rooms.get(data.roomId);
     if (!room) return;
@@ -247,18 +298,19 @@ io.on('connection', (socket) => {
 
     console.log(`Player ${found.index} submitted deck in room ${data.roomId}`);
 
-    // Se ambos estão prontos, emitir start_game com os dois decks
     const p0 = room.players[0];
     const p1 = room.players[1];
     if (p0 && p1 && p0.ready && p1.ready) {
+      room.status = 'playing';
       io.in(data.roomId).emit('both_ready', {
         decks: [p0.deck, p1.deck],
       });
+      broadcastRoomList();
       console.log(`Both players ready in room ${data.roomId} — starting game`);
     }
   });
 
-  // ── Sync de game state completo ─────────────────────────
+  // ── Sync state ──────────────────────────────────────────
   socket.on('sync_state', (data: { roomId: string; state: unknown }) => {
     const room = rooms.get(data.roomId);
     if (room) {
@@ -285,20 +337,17 @@ io.on('connection', (socket) => {
     if (!found) return;
 
     const { room, roomId, slot, index } = found;
-
-    // Marcar como offline (NÃO remove da sala)
     slot.socketId = null;
 
-    // Notificar oponente
     socket.to(roomId).emit('player_disconnected', { playerIndex: index });
 
-    // Se ninguém está online, agendar destruição
     const anyOnline = room.players.some(p => isPlayerOnline(p));
     if (!anyOnline) {
       scheduleRoomDestroy(roomId);
     }
 
-    console.log(`Player ${slot.playerId} (index ${index}) went offline in room ${roomId}`);
+    broadcastRoomList();
+    console.log(`Player ${slot.name} (index ${index}) went offline in room ${roomId}`);
   });
 });
 

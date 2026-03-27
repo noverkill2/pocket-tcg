@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useGameStore } from '../store/gameStore';
 
-// Usa o mesmo host que serviu a página, mas na porta 3002
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || `http://${window.location.hostname}:3002`;
 
 export interface ChatMessage {
@@ -11,7 +10,16 @@ export interface ChatMessage {
   timestamp: number;
 }
 
-// ── Player ID persistente (sobrevive refresh/reconexão) ──
+export interface RoomInfo {
+  id: string;
+  name: string;
+  hasPassword: boolean;
+  hostName: string;
+  players: number;
+  status: string;
+}
+
+// ── Player ID persistente ──
 function getPlayerId(): string {
   let id = sessionStorage.getItem('pocket-tcg-player-id');
   if (!id) {
@@ -21,7 +29,7 @@ function getPlayerId(): string {
   return id;
 }
 
-// ── Flag global: true quando aplicando state remoto (evita loop de sync) ──
+// ── Flag anti-loop ──
 let applyingRemote = false;
 let applyingRemoteCounter = 0;
 
@@ -33,7 +41,6 @@ function markApplyingRemote() {
   applyingRemote = true;
   applyingRemoteCounter++;
   const currentCounter = applyingRemoteCounter;
-  // Liberar somente quando o último setState terminar de propagar
   setTimeout(() => {
     if (applyingRemoteCounter === currentCounter) {
       applyingRemote = false;
@@ -50,26 +57,25 @@ export function useMultiplayer() {
   const [opponentConnected, setOpponentConnected] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [reconnecting, setReconnecting] = useState(false);
+  const [roomList, setRoomList] = useState<RoomInfo[]>([]);
 
   const socketRef = useRef<Socket | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const playerIdRef = useRef(getPlayerId());
 
-  // Callbacks que a MultiplayerPage pode registrar
   const onBothReadyRef = useRef<((decks: [unknown[], unknown[]]) => void) | null>(null);
   const onRestoredRef = useRef<((hadState: boolean) => void) | null>(null);
+  const onPlayerJoinedRef = useRef<((data: { playerName: string }) => void) | null>(null);
 
-  // Manter ref do roomId sincronizado
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
 
-  // Salvar roomId no sessionStorage para reconexão
   useEffect(() => {
     if (roomId) {
       sessionStorage.setItem('pocket-tcg-room-id', roomId);
     }
   }, [roomId]);
 
-  // ── Conectar ao servidor ──
+  // ── Conectar ──
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
 
@@ -87,19 +93,16 @@ export function useMultiplayer() {
       setConnected(true);
       setReconnecting(false);
 
-      // Tentar rejoin automático se tínhamos uma sala
+      // Auto-rejoin
       const savedRoom = sessionStorage.getItem('pocket-tcg-room-id');
       if (savedRoom && !roomIdRef.current) {
-        console.log('[MP] Attempting auto-rejoin to room:', savedRoom);
         s.emit('rejoin_room', { playerId: playerIdRef.current }, (res: { success: boolean; roomId?: string; playerIndex?: number; hasState?: boolean }) => {
           if (res.success && res.roomId) {
-            console.log('[MP] Rejoined room:', res.roomId, 'as player', res.playerIndex);
             setRoomId(res.roomId);
             setPlayerIndex((res.playerIndex ?? 0) as 0 | 1);
             setOpponentConnected(true);
             onRestoredRef.current?.(res.hasState ?? false);
           } else {
-            // Sala não existe mais
             sessionStorage.removeItem('pocket-tcg-room-id');
           }
         });
@@ -107,54 +110,46 @@ export function useMultiplayer() {
     });
 
     s.on('disconnect', () => {
-      console.log('[MP] Disconnected');
       setConnected(false);
       setReconnecting(true);
     });
 
-    s.on('reconnect_attempt', (attempt: number) => {
-      console.log('[MP] Reconnect attempt:', attempt);
+    s.on('reconnect_attempt', () => {
       setReconnecting(true);
     });
 
-    // Oponente entrou na sala
-    s.on('player_joined', () => {
-      console.log('[MP] Opponent joined');
+    // Lista de salas em tempo real
+    s.on('room_list', (list: RoomInfo[]) => {
+      setRoomList(list);
+    });
+
+    s.on('player_joined', (data: { playerName: string }) => {
+      setOpponentConnected(true);
+      onPlayerJoinedRef.current?.(data);
+    });
+
+    s.on('player_reconnected', () => {
       setOpponentConnected(true);
     });
 
-    // Oponente reconectou
-    s.on('player_reconnected', (_data: { playerIndex: number }) => {
-      console.log('[MP] Opponent reconnected');
-      setOpponentConnected(true);
-    });
-
-    // Oponente desconectou (temporário — pode voltar)
-    s.on('player_disconnected', (_data: { playerIndex: number }) => {
-      console.log('[MP] Opponent disconnected');
+    s.on('player_disconnected', () => {
       setOpponentConnected(false);
     });
 
-    // Receber sync_state do oponente
     s.on('sync_state', (state: unknown) => {
       markApplyingRemote();
       useGameStore.setState(state as Partial<ReturnType<typeof useGameStore.getState>>);
     });
 
-    // Restaurar state salvo no servidor (após reconexão)
     s.on('restore_state', (state: unknown) => {
-      console.log('[MP] Restoring state from server');
       markApplyingRemote();
       useGameStore.setState(state as Partial<ReturnType<typeof useGameStore.getState>>);
     });
 
-    // Ambos jogadores prontos — hora de iniciar com os decks corretos
     s.on('both_ready', (data: { decks: [unknown[], unknown[]] }) => {
-      console.log('[MP] Both players ready, starting game');
       onBothReadyRef.current?.(data.decks);
     });
 
-    // Chat
     s.on('chat_message', (msg: ChatMessage) => {
       setChatMessages(prev => [...prev, msg]);
     });
@@ -164,21 +159,31 @@ export function useMultiplayer() {
   }, []);
 
   // ── Criar sala ──
-  const createRoom = useCallback(() => {
+  const createRoom = useCallback((roomName: string, password: string, playerName: string) => {
     const s = socketRef.current;
     if (!s) return;
-    s.emit('create_room', { playerId: playerIdRef.current }, (data: { roomId: string }) => {
+    s.emit('create_room', {
+      playerId: playerIdRef.current,
+      roomName,
+      password: password || undefined,
+      playerName,
+    }, (data: { roomId: string }) => {
       setRoomId(data.roomId);
       setPlayerIndex(0);
     });
   }, []);
 
   // ── Entrar na sala ──
-  const joinRoom = useCallback((code: string) => {
+  const joinRoom = useCallback((code: string, password: string, playerName: string) => {
     const s = socketRef.current;
     if (!s) return Promise.resolve({ success: false, error: 'Não conectado' });
     return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      s.emit('join_room', { roomId: code, playerId: playerIdRef.current }, (data: { success: boolean; error?: string; playerIndex?: number }) => {
+      s.emit('join_room', {
+        roomId: code,
+        playerId: playerIdRef.current,
+        password: password || undefined,
+        playerName,
+      }, (data: { success: boolean; error?: string; playerIndex?: number }) => {
         if (data.success) {
           setRoomId(code);
           setPlayerIndex((data.playerIndex ?? 1) as 0 | 1);
@@ -189,7 +194,16 @@ export function useMultiplayer() {
     });
   }, []);
 
-  // ── Enviar deck para o servidor ──
+  // ── Pedir lista atualizada ──
+  const refreshRooms = useCallback(() => {
+    const s = socketRef.current;
+    if (!s) return;
+    s.emit('list_rooms', (list: RoomInfo[]) => {
+      setRoomList(list);
+    });
+  }, []);
+
+  // ── Enviar deck ──
   const submitDeck = useCallback((deckCards: unknown[]) => {
     const s = socketRef.current;
     const r = roomIdRef.current;
@@ -197,7 +211,7 @@ export function useMultiplayer() {
     s.emit('submit_deck', { roomId: r, deck: deckCards });
   }, []);
 
-  // ── Sync state completo ──
+  // ── Sync state ──
   const syncState = useCallback(() => {
     const s = socketRef.current;
     const r = roomIdRef.current;
@@ -214,7 +228,7 @@ export function useMultiplayer() {
     s.emit('chat_message', { roomId: r, message, playerName });
   }, []);
 
-  // ── Desconectar (intencional — sair da sala) ──
+  // ── Desconectar ──
   const disconnect = useCallback(() => {
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -225,7 +239,6 @@ export function useMultiplayer() {
     sessionStorage.removeItem('pocket-tcg-room-id');
   }, []);
 
-  // Cleanup no unmount
   useEffect(() => {
     return () => {
       socketRef.current?.disconnect();
@@ -233,7 +246,7 @@ export function useMultiplayer() {
     };
   }, []);
 
-  // ── Registrar callbacks ──
+  // ── Callbacks ──
   const onBothReady = useCallback((cb: (decks: [unknown[], unknown[]]) => void) => {
     onBothReadyRef.current = cb;
   }, []);
@@ -242,15 +255,20 @@ export function useMultiplayer() {
     onRestoredRef.current = cb;
   }, []);
 
+  const onPlayerJoined = useCallback((cb: (data: { playerName: string }) => void) => {
+    onPlayerJoinedRef.current = cb;
+  }, []);
+
   return {
     connect, disconnect,
     connected, reconnecting,
     createRoom, joinRoom,
     roomId, playerIndex,
     opponentConnected,
+    roomList, refreshRooms,
     submitDeck,
     syncState,
     chatMessages, sendChat,
-    onBothReady, onRestored,
+    onBothReady, onRestored, onPlayerJoined,
   };
 }
