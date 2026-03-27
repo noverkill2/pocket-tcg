@@ -185,7 +185,7 @@ io.on('connection', (socket) => {
   });
 
   // ── Entrar na sala ──────────────────────────────────────
-  socket.on('join_room', (data: { roomId: string; playerId: string; password?: string; playerName: string }, callback: (res: { success: boolean; error?: string; playerIndex?: number }) => void) => {
+  socket.on('join_room', (data: { roomId: string; playerId: string; password?: string; playerName: string }, callback: (res: { success: boolean; error?: string; playerIndex?: number; opponentOnline?: boolean }) => void) => {
     const room = rooms.get(data.roomId);
     if (!room) {
       callback({ success: false, error: 'Sala não encontrada' });
@@ -199,7 +199,9 @@ io.on('connection', (socket) => {
       existing.slot.name = data.playerName || existing.slot.name;
       socket.join(data.roomId);
       cancelDestroyTimer(room);
-      callback({ success: true, playerIndex: existing.index });
+      const opponentIdx = existing.index === 0 ? 1 : 0;
+      const opponentOnline = isPlayerOnline(room.players[opponentIdx]);
+      callback({ success: true, playerIndex: existing.index, opponentOnline });
       socket.to(data.roomId).emit('player_reconnected', { playerIndex: existing.index });
       if (room.state) {
         socket.emit('restore_state', room.state);
@@ -216,8 +218,12 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Sala cheia
-    if (room.players[1] !== null) {
+    // Encontrar slot vazio (pode ser 0 se host saiu, ou 1 se é o segundo jogador)
+    let freeSlot: 0 | 1 | null = null;
+    if (room.players[0] === null) freeSlot = 0;
+    else if (room.players[1] === null) freeSlot = 1;
+
+    if (freeSlot === null) {
       callback({ success: false, error: 'Sala cheia' });
       return;
     }
@@ -227,17 +233,22 @@ io.on('connection', (socket) => {
       socketId: socket.id,
       deck: null,
       ready: false,
-      name: data.playerName || 'Jogador 2',
+      name: data.playerName || `Jogador ${freeSlot + 1}`,
     };
 
-    room.players[1] = joinerSlot;
-    room.status = 'selecting';
+    room.players[freeSlot] = joinerSlot;
+    if (room.players[0] !== null && room.players[1] !== null) {
+      room.status = 'selecting';
+    }
     playerRoomMap.set(data.playerId, data.roomId);
     socket.join(data.roomId);
     cancelDestroyTimer(room);
 
-    console.log(`Player ${data.playerName} joined room ${data.roomId}`);
-    callback({ success: true, playerIndex: 1 });
+    const opponentIdx = freeSlot === 0 ? 1 : 0;
+    const opponentOnline = isPlayerOnline(room.players[opponentIdx]);
+
+    console.log(`Player ${data.playerName} joined room ${data.roomId} as player ${freeSlot}`);
+    callback({ success: true, playerIndex: freeSlot, opponentOnline });
 
     socket.to(data.roomId).emit('player_joined', { playerName: joinerSlot.name });
     broadcastRoomList();
@@ -283,6 +294,40 @@ io.on('connection', (socket) => {
 
     socket.to(roomId).emit('player_reconnected', { playerIndex: found.index });
     broadcastRoomList();
+  });
+
+  // ── Sair da sala (intencional — voltar ao lobby) ────────
+  socket.on('leave_room', (data: { roomId: string }, callback?: (res: { success: boolean }) => void) => {
+    const room = rooms.get(data.roomId);
+    if (!room) { callback?.({ success: false }); return; }
+
+    const found = findPlayerInRoom(room, findRoomBySocketId(socket.id)?.slot.playerId ?? '');
+    if (!found) { callback?.({ success: false }); return; }
+
+    const { index } = found;
+
+    // Remover jogador do slot
+    room.players[index] = null as unknown as typeof room.players[0];
+    playerRoomMap.delete(found.slot.playerId);
+    socket.leave(data.roomId);
+
+    // Se a sala ainda não começou, voltar status pra waiting
+    if (room.status === 'selecting') {
+      room.status = 'waiting';
+    }
+
+    // Notificar oponente
+    socket.to(data.roomId).emit('player_disconnected', { playerIndex: index });
+
+    // Se ninguém sobrou, agendar destruição
+    const anyPlayer = room.players.some(p => p !== null);
+    if (!anyPlayer) {
+      scheduleRoomDestroy(data.roomId);
+    }
+
+    broadcastRoomList();
+    console.log(`Player ${found.slot.name} left room ${data.roomId} intentionally`);
+    callback?.({ success: true });
   });
 
   // ── Enviar deck ─────────────────────────────────────────

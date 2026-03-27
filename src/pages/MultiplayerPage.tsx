@@ -139,7 +139,8 @@ export function MultiplayerPage() {
     }
     const result = await mp.joinRoom(room.id, '', playerName.trim());
     if (result.success) {
-      setPhase('deck_select');
+      // Se tem oponente → deck_select, senão → waiting
+      setPhase(mp.opponentConnected ? 'deck_select' : 'waiting');
       toast('Entrou na sala!', 'success');
     } else {
       toast(result.error || 'Erro ao entrar', 'error');
@@ -152,7 +153,7 @@ export function MultiplayerPage() {
     if (result.success) {
       setJoiningRoom(null);
       setJoinPassword('');
-      setPhase('deck_select');
+      setPhase(mp.opponentConnected ? 'deck_select' : 'waiting');
       toast('Entrou na sala!', 'success');
     } else {
       toast(result.error || 'Senha incorreta', 'error');

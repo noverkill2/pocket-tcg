@@ -183,11 +183,11 @@ export function useMultiplayer() {
         playerId: playerIdRef.current,
         password: password || undefined,
         playerName,
-      }, (data: { success: boolean; error?: string; playerIndex?: number }) => {
+      }, (data: { success: boolean; error?: string; playerIndex?: number; opponentOnline?: boolean }) => {
         if (data.success) {
           setRoomId(code);
           setPlayerIndex((data.playerIndex ?? 1) as 0 | 1);
-          setOpponentConnected(true);
+          setOpponentConnected(data.opponentOnline ?? false);
         }
         resolve(data);
       });
@@ -228,12 +228,16 @@ export function useMultiplayer() {
     s.emit('chat_message', { roomId: r, message, playerName });
   }, []);
 
-  // ── Voltar ao lobby (mantém conexão e sala viva) ──
+  // ── Voltar ao lobby (sai da sala mas mantém conexão) ──
   const leaveToLobby = useCallback(() => {
+    const s = socketRef.current;
+    const r = roomIdRef.current;
+    if (s && r) {
+      s.emit('leave_room', { roomId: r });
+    }
     setRoomId(null);
     setOpponentConnected(false);
-    // NÃO desconecta o socket, NÃO remove do localStorage
-    // A sala continua viva no servidor e o jogador pode reentrar
+    localStorage.removeItem('pocket-tcg-room-id');
   }, []);
 
   // ── Desconectar de verdade (sair do jogo) ──
