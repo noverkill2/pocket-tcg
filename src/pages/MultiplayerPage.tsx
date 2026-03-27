@@ -44,7 +44,7 @@ export function MultiplayerPage() {
     if (playerName) localStorage.setItem('pocket-tcg-player-name', playerName);
   }, [playerName]);
 
-  // Conectar ao servidor
+  // Conectar ao servidor (disconnect já emite leave_room antes de fechar)
   useEffect(() => {
     mp.connect();
     return () => mp.disconnect();

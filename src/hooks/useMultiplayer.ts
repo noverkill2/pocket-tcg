@@ -243,7 +243,13 @@ export function useMultiplayer() {
 
   // ── Desconectar de verdade (sair do jogo) ──
   const disconnect = useCallback(() => {
-    socketRef.current?.disconnect();
+    const s = socketRef.current;
+    const r = roomIdRef.current;
+    // Liberar slot no servidor antes de desconectar
+    if (s && r) {
+      s.emit('leave_room', { roomId: r });
+    }
+    s?.disconnect();
     socketRef.current = null;
     setConnected(false);
     setRoomId(null);
