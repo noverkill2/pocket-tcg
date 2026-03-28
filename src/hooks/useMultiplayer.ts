@@ -124,17 +124,26 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       setConnected(true);
       setReconnecting(false);
 
-      // Auto-rejoin
+      // Auto-rejoin (sempre tenta quando tem sala salva — cobre refresh E reconnect)
       const savedRoom = localStorage.getItem('pocket-tcg-room-id');
-      if (savedRoom && !roomIdRef.current) {
-        s.emit('rejoin_room', { playerId: playerIdRef.current }, (res: { success: boolean; roomId?: string; playerIndex?: number; hasState?: boolean }) => {
+      if (savedRoom) {
+        const wasAlreadyInRoom = !!roomIdRef.current;
+        s.emit('rejoin_room', { playerId: playerIdRef.current }, (res: { success: boolean; roomId?: string; playerIndex?: number; hasState?: boolean; opponentOnline?: boolean }) => {
           if (res.success && res.roomId) {
             setRoomId(res.roomId);
             setPlayerIndex((res.playerIndex ?? 0) as 0 | 1);
-            setOpponentConnected(true);
-            onRestoredRef.current?.(res.hasState ?? false);
+            setOpponentConnected(res.opponentOnline ?? false);
+            // Só dispara onRestored se é mount fresco (page refresh)
+            // No reconnect do socket, o state local já está correto
+            if (!wasAlreadyInRoom) {
+              onRestoredRef.current?.(res.hasState ?? false);
+            }
           } else {
             localStorage.removeItem('pocket-tcg-room-id');
+            if (wasAlreadyInRoom) {
+              setRoomId(null);
+              setOpponentConnected(false);
+            }
           }
         });
       }

@@ -255,7 +255,7 @@ io.on('connection', (socket) => {
   });
 
   // ── Reconectar à sala ───────────────────────────────────
-  socket.on('rejoin_room', (data: { playerId: string }, callback: (res: { success: boolean; roomId?: string; playerIndex?: number; hasState?: boolean }) => void) => {
+  socket.on('rejoin_room', (data: { playerId: string }, callback: (res: { success: boolean; roomId?: string; playerIndex?: number; hasState?: boolean; opponentOnline?: boolean }) => void) => {
     const roomId = playerRoomMap.get(data.playerId);
     if (!roomId) {
       callback({ success: false });
@@ -280,12 +280,16 @@ io.on('connection', (socket) => {
     socket.join(roomId);
     cancelDestroyTimer(room);
 
+    const opponentIdx = found.index === 0 ? 1 : 0;
+    const opponentOnline = isPlayerOnline(room.players[opponentIdx]);
+
     console.log(`Player ${found.slot.name} rejoined room ${roomId}`);
     callback({
       success: true,
       roomId,
       playerIndex: found.index,
       hasState: room.state !== null,
+      opponentOnline,
     });
 
     if (room.state) {
