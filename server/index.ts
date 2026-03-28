@@ -124,7 +124,7 @@ function getRoomList() {
       name: room.name,
       hasPassword: room.password !== null,
       hostName: room.hostName,
-      players: room.players.filter(p => p !== null).length,
+      players: room.players.filter(p => isPlayerOnline(p)).length,
       status: room.status,
     });
   }
@@ -185,23 +185,24 @@ io.on('connection', (socket) => {
   });
 
   // ── Entrar na sala ──────────────────────────────────────
-  socket.on('join_room', (data: { roomId: string; playerId: string; password?: string; playerName: string }, callback: (res: { success: boolean; error?: string; playerIndex?: number; opponentOnline?: boolean }) => void) => {
+  socket.on('join_room', (data: { roomId: string; playerId: string; password?: string; playerName: string }, callback: (res: { success: boolean; error?: string; playerIndex?: number; opponentOnline?: boolean; hasState?: boolean }) => void) => {
     const room = rooms.get(data.roomId);
     if (!room) {
       callback({ success: false, error: 'Sala não encontrada' });
       return;
     }
 
-    // Reconexão
+    // Reconexão (jogador já tem slot na sala)
     const existing = findPlayerInRoom(room, data.playerId);
     if (existing) {
       existing.slot.socketId = socket.id;
       existing.slot.name = data.playerName || existing.slot.name;
+      playerRoomMap.set(data.playerId, data.roomId);
       socket.join(data.roomId);
       cancelDestroyTimer(room);
       const opponentIdx = existing.index === 0 ? 1 : 0;
       const opponentOnline = isPlayerOnline(room.players[opponentIdx]);
-      callback({ success: true, playerIndex: existing.index, opponentOnline });
+      callback({ success: true, playerIndex: existing.index, opponentOnline, hasState: room.state !== null });
       socket.to(data.roomId).emit('player_reconnected', { playerIndex: existing.index });
       if (room.state) {
         socket.emit('restore_state', room.state);
@@ -309,24 +310,42 @@ io.on('connection', (socket) => {
     if (!found) { callback?.({ success: false }); return; }
 
     const { index } = found;
-
-    // Remover jogador do slot
-    room.players[index] = null as unknown as typeof room.players[0];
-    playerRoomMap.delete(found.slot.playerId);
     socket.leave(data.roomId);
 
-    // Se a sala ainda não começou, voltar status pra waiting
-    if (room.status === 'selecting') {
-      room.status = 'waiting';
-    }
+    if (room.status === 'playing') {
+      // ── Jogo em andamento: mesa persiste, slot mantido ──
+      // Só desconecta o socket, mas o slot (e o state) ficam preservados.
+      // Jogador pode voltar pelo lobby clicando na sala.
+      found.slot.socketId = null;
+      playerRoomMap.delete(found.slot.playerId);
+      socket.to(data.roomId).emit('player_disconnected', { playerIndex: index });
 
-    // Notificar oponente
-    socket.to(data.roomId).emit('player_disconnected', { playerIndex: index });
+      // Se ambos offline, agendar destruição (5 min)
+      const anyOnline = room.players.some(p => isPlayerOnline(p));
+      if (!anyOnline) {
+        scheduleRoomDestroy(data.roomId);
+      }
+    } else {
+      // ── Sala em espera/seleção: remover slot de verdade ──
+      room.players[index] = null as unknown as typeof room.players[0];
+      playerRoomMap.delete(found.slot.playerId);
 
-    // Se ninguém sobrou, agendar destruição
-    const anyPlayer = room.players.some(p => p !== null);
-    if (!anyPlayer) {
-      scheduleRoomDestroy(data.roomId);
+      if (room.status === 'selecting') {
+        room.status = 'waiting';
+      }
+
+      socket.to(data.roomId).emit('player_disconnected', { playerIndex: index });
+
+      // Se ninguém sobrou, destruir imediatamente
+      const anyPlayer = room.players.some(p => p !== null);
+      if (!anyPlayer) {
+        cancelDestroyTimer(room);
+        for (const p of room.players) {
+          if (p) playerRoomMap.delete(p.playerId);
+        }
+        rooms.delete(data.roomId);
+        console.log(`Room ${data.roomId} destroyed (empty, not in game)`);
+      }
     }
 
     broadcastRoomList();

@@ -54,7 +54,7 @@ interface MultiplayerContextValue {
   connected: boolean;
   reconnecting: boolean;
   createRoom: (roomName: string, password: string, playerName: string) => void;
-  joinRoom: (code: string, password: string, playerName: string) => Promise<{ success: boolean; error?: string; opponentOnline: boolean }>;
+  joinRoom: (code: string, password: string, playerName: string) => Promise<{ success: boolean; error?: string; opponentOnline: boolean; hasState: boolean }>;
   roomId: string | null;
   playerIndex: 0 | 1;
   opponentConnected: boolean;
@@ -131,10 +131,11 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
             setRoomId(res.roomId);
             setPlayerIndex((res.playerIndex ?? 0) as 0 | 1);
             setOpponentConnected(res.opponentOnline ?? false);
-            // Só dispara onRestored se é mount fresco (page refresh)
-            // No reconnect do socket, o state local já está correto
-            if (!wasAlreadyInRoom) {
-              onRestoredRef.current?.(res.hasState ?? false);
+            // Se tem state, o onRestored vai ser chamado pelo evento restore_state
+            // (depois do state ser aplicado no gameStore)
+            // Se NÃO tem state, dispara aqui direto
+            if (!wasAlreadyInRoom && !res.hasState) {
+              onRestoredRef.current?.(false);
             }
           } else {
             localStorage.removeItem('pocket-tcg-room-id');
@@ -181,6 +182,9 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     s.on('restore_state', (state: unknown) => {
       markApplyingRemote();
       useGameStore.setState(state as Partial<ReturnType<typeof useGameStore.getState>>);
+      // Dispara onRestored AQUI, depois que o state já foi aplicado
+      // (antes disparava no callback do rejoin, antes do state chegar)
+      onRestoredRef.current?.(true);
     });
 
     s.on('both_ready', (data: { decks: [unknown[], unknown[]] }) => {
@@ -212,21 +216,22 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   // ── Entrar na sala ──
   const joinRoom = useCallback((code: string, password: string, playerName: string) => {
     const s = socketRef.current;
-    if (!s) return Promise.resolve({ success: false, error: 'Não conectado', opponentOnline: false });
-    return new Promise<{ success: boolean; error?: string; opponentOnline: boolean }>((resolve) => {
+    if (!s) return Promise.resolve({ success: false, error: 'Não conectado', opponentOnline: false, hasState: false });
+    return new Promise<{ success: boolean; error?: string; opponentOnline: boolean; hasState: boolean }>((resolve) => {
       s.emit('join_room', {
         roomId: code,
         playerId: playerIdRef.current,
         password: password || undefined,
         playerName,
-      }, (data: { success: boolean; error?: string; playerIndex?: number; opponentOnline?: boolean }) => {
+      }, (data: { success: boolean; error?: string; playerIndex?: number; opponentOnline?: boolean; hasState?: boolean }) => {
         const opponentOnline = data.opponentOnline ?? false;
+        const hasState = data.hasState ?? false;
         if (data.success) {
           setRoomId(code);
           setPlayerIndex((data.playerIndex ?? 1) as 0 | 1);
           setOpponentConnected(opponentOnline);
         }
-        resolve({ ...data, opponentOnline });
+        resolve({ ...data, opponentOnline, hasState });
       });
     });
   }, []);

@@ -156,8 +156,13 @@ export function MultiplayerPage() {
     }
     const result = await mp.joinRoom(room.id, '', playerName.trim());
     if (result.success) {
-      setPhase(result.opponentOnline ? 'deck_select' : 'waiting');
-      toast('Entrou na sala!', 'success');
+      if (result.hasState) {
+        // Reconexão em jogo — restore_state vai setar a fase via onRestored
+        toast('Reconectando à partida...', 'success');
+      } else {
+        setPhase(result.opponentOnline ? 'deck_select' : 'waiting');
+        toast('Entrou na sala!', 'success');
+      }
     } else {
       toast(result.error || 'Erro ao entrar', 'error');
     }
@@ -169,8 +174,12 @@ export function MultiplayerPage() {
     if (result.success) {
       setJoiningRoom(null);
       setJoinPassword('');
-      setPhase(result.opponentOnline ? 'deck_select' : 'waiting');
-      toast('Entrou na sala!', 'success');
+      if (result.hasState) {
+        toast('Reconectando à partida...', 'success');
+      } else {
+        setPhase(result.opponentOnline ? 'deck_select' : 'waiting');
+        toast('Entrou na sala!', 'success');
+      }
     } else {
       toast(result.error || 'Senha incorreta', 'error');
     }
@@ -249,7 +258,7 @@ export function MultiplayerPage() {
             )}
           </div>
 
-          {/* Salas em jogo */}
+          {/* Salas em jogo (clicável pra reconectar) */}
           {activeRooms.length > 0 && (
             <div className="mb-4">
               <h3 className="mb-2 text-sm font-bold text-text-secondary uppercase tracking-wider">
@@ -257,16 +266,20 @@ export function MultiplayerPage() {
               </h3>
               <div className="space-y-2">
                 {activeRooms.map(room => (
-                  <div key={room.id}
-                    className="flex w-full items-center gap-3 rounded-xl bg-bg-section p-4 opacity-60">
+                  <button key={room.id} onClick={() => handleJoinFromLobby(room)}
+                    disabled={!mp.connected || !playerName.trim()}
+                    className="flex w-full items-center gap-3 rounded-xl bg-bg-card p-4 text-left transition-colors hover:bg-bg-section active:scale-[0.98] disabled:opacity-30">
                     <div className="flex-1 min-w-0">
                       <span className="truncate text-sm font-medium text-text-primary">{room.name}</span>
                       <div className="text-xs text-text-secondary">Host: {room.hostName}</div>
                     </div>
-                    <span className="rounded-full bg-accent-red/20 px-2 py-0.5 text-[10px] font-bold text-accent-red">
-                      Jogando
-                    </span>
-                  </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-accent-gold/20 px-2 py-0.5 text-[10px] font-bold text-accent-gold">
+                        {room.players}/2 online
+                      </span>
+                      <span className="text-xs font-mono text-text-secondary">{room.id}</span>
+                    </div>
+                  </button>
                 ))}
               </div>
             </div>
