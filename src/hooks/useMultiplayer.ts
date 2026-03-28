@@ -30,8 +30,10 @@ function getPlayerId(): string {
 }
 
 // ── Flag anti-loop ──
+// Usa queueMicrotask pra desbloquear logo após os subscribers do Zustand rodarem
+// (eles rodam síncrono no setState). Antes usava setTimeout(100ms) que podia
+// se sobrepor e bloquear syncs legítimos por tempo demais.
 let applyingRemote = false;
-let applyingRemoteCounter = 0;
 
 export function isApplyingRemote() {
   return applyingRemote;
@@ -39,13 +41,9 @@ export function isApplyingRemote() {
 
 function markApplyingRemote() {
   applyingRemote = true;
-  applyingRemoteCounter++;
-  const currentCounter = applyingRemoteCounter;
-  setTimeout(() => {
-    if (applyingRemoteCounter === currentCounter) {
-      applyingRemote = false;
-    }
-  }, 100);
+  queueMicrotask(() => {
+    applyingRemote = false;
+  });
 }
 
 // ── Tipo do contexto ──
@@ -255,8 +253,9 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     const s = socketRef.current;
     const r = roomIdRef.current;
     if (!s || !r) return;
-    const { history, ...state } = useGameStore.getState();
-    s.emit('sync_state', { roomId: r, state });
+    const { history, log, ...state } = useGameStore.getState();
+    // Envia só as últimas 20 entradas do log pra não inflar o payload
+    s.emit('sync_state', { roomId: r, state: { ...state, log: log.slice(-20) } });
   }, []);
 
   // ── Chat ──

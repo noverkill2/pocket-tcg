@@ -126,6 +126,15 @@ export function MultiplayerPage() {
     }
   }, [mp.opponentConnected, phase, mp]);
 
+  // Safety net: re-sync periódico a cada 30s (recupera de syncs perdidos)
+  useEffect(() => {
+    if (phase !== 'playing' || !mp.connected) return;
+    const interval = setInterval(() => {
+      if (!isApplyingRemote()) mp.syncState();
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [phase, mp.connected, mp]);
+
   // ── Handlers ──
 
   const handleCreateRoom = () => {
