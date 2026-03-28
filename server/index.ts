@@ -353,6 +353,31 @@ io.on('connection', (socket) => {
     callback?.({ success: true });
   });
 
+  // ── Destruir sala (kick ambos) ─────────────────────────
+  socket.on('destroy_room', (data: { roomId: string }, callback?: (res: { success: boolean }) => void) => {
+    const room = rooms.get(data.roomId);
+    if (!room) { callback?.({ success: false }); return; }
+
+    // Verificar se quem pediu está na sala
+    const found = findRoomBySocketId(socket.id);
+    if (!found || found.roomId !== data.roomId) { callback?.({ success: false }); return; }
+
+    cancelDestroyTimer(room);
+
+    // Notificar todos na sala (incluindo quem pediu)
+    io.in(data.roomId).emit('room_destroyed');
+
+    // Limpar tudo
+    for (const p of room.players) {
+      if (p) playerRoomMap.delete(p.playerId);
+    }
+    rooms.delete(data.roomId);
+
+    broadcastRoomList();
+    console.log(`Room ${data.roomId} destroyed by ${found.slot.name}`);
+    callback?.({ success: true });
+  });
+
   // ── Enviar deck ─────────────────────────────────────────
   socket.on('submit_deck', (data: { roomId: string; deck: unknown[] }) => {
     const room = rooms.get(data.roomId);

@@ -8,7 +8,6 @@ import { createDeckFromCards } from '../utils/formatCard';
 import { useMultiplayer, isApplyingRemote } from '../hooks/useMultiplayer';
 import type { RoomInfo } from '../hooks/useMultiplayer';
 import { useToast } from '../components/ui/Toast';
-import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import type { PokemonTCGCard } from '../types/card';
 
 export function MultiplayerPage() {
@@ -34,7 +33,6 @@ export function MultiplayerPage() {
   const [phase, setPhase] = useState<'lobby' | 'waiting' | 'deck_select' | 'waiting_opponent' | 'playing'>(getInitialPhase);
   const [selectedDeck, setSelectedDeck] = useState('');
   const [showLog, setShowLog] = useState(false);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const syncUnsubRef = useRef<(() => void) | null>(null);
 
@@ -100,6 +98,15 @@ export function MultiplayerPage() {
       }
     });
   }, [mp, toast]);
+
+  // Sala destruída (por qualquer jogador)
+  useEffect(() => {
+    mp.onRoomDestroyed(() => {
+      resetGame();
+      setPhase('lobby');
+      toast('A sala foi encerrada.', 'error');
+    });
+  }, [mp, resetGame, toast]);
 
   // Auto-sync durante jogo
   useEffect(() => {
@@ -431,7 +438,11 @@ export function MultiplayerPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
             </svg>
           </button>
-          <GameMenu />
+          <GameMenu
+            isOnline
+            onLeaveRoom={() => { mp.leaveToLobby(); resetGame(); setPhase('lobby'); }}
+            onDestroyRoom={() => { mp.destroyRoom(); }}
+          />
         </div>
       </div>
 
@@ -463,9 +474,6 @@ export function MultiplayerPage() {
 
       <GameBoard perspective={mp.playerIndex} />
       <GameLog isOpen={showLog} onClose={() => setShowLog(false)} />
-      <ConfirmDialog isOpen={showResetConfirm} title="Sair" message="Tem certeza?" confirmLabel="Sair" variant="danger"
-        onConfirm={() => { resetGame(); mp.disconnect(); setShowResetConfirm(false); }}
-        onCancel={() => setShowResetConfirm(false)} />
     </div>
   );
 }

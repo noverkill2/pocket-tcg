@@ -1,10 +1,19 @@
 import { useState, useEffect } from 'react';
 import { CoinFlip } from '../ui/CoinFlip';
 import { DiceRoll } from '../ui/DiceRoll';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { useGameStore } from '../../store/gameStore';
 
-export function GameMenu() {
+interface GameMenuProps {
+  onLeaveRoom?: () => void;
+  onDestroyRoom?: () => void;
+  isOnline?: boolean;
+}
+
+export function GameMenu({ onLeaveRoom, onDestroyRoom, isOnline }: GameMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showDestroyConfirm, setShowDestroyConfirm] = useState(false);
   const endTurn = useGameStore(s => s.endTurn);
   const undo = useGameStore(s => s.undo);
   const shuffleDeck = useGameStore(s => s.shuffleDeck);
@@ -68,10 +77,51 @@ export function GameMenu() {
                 <CoinFlip />
                 <DiceRoll />
               </div>
+
+              {/* Botões multiplayer */}
+              {isOnline && (
+                <>
+                  <div className="h-px bg-bg-section" />
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => { setIsOpen(false); setShowLeaveConfirm(true); }}
+                      className="w-full rounded-lg bg-accent-gold/20 px-3 py-2.5 text-sm font-medium text-accent-gold hover:bg-accent-gold/30 active:scale-95"
+                    >
+                      Sair da Sala
+                    </button>
+                    <button
+                      onClick={() => { setIsOpen(false); setShowDestroyConfirm(true); }}
+                      className="w-full rounded-lg bg-accent-red/20 px-3 py-2.5 text-sm font-medium text-accent-red hover:bg-accent-red/30 active:scale-95"
+                    >
+                      Encerrar Partida
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        isOpen={showLeaveConfirm}
+        title="Sair da Sala"
+        message="Você vai voltar ao lobby. A mesa continua ativa por 5 minutos — você pode voltar clicando na sala."
+        confirmLabel="Sair"
+        variant="danger"
+        onConfirm={() => { setShowLeaveConfirm(false); onLeaveRoom?.(); }}
+        onCancel={() => setShowLeaveConfirm(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={showDestroyConfirm}
+        title="Encerrar Partida"
+        message="A sala será destruída e ambos os jogadores serão removidos. Esta ação não pode ser desfeita."
+        confirmLabel="Encerrar"
+        variant="danger"
+        onConfirm={() => { setShowDestroyConfirm(false); onDestroyRoom?.(); }}
+        onCancel={() => setShowDestroyConfirm(false)}
+      />
     </div>
   );
 }

@@ -51,6 +51,7 @@ interface MultiplayerContextValue {
   connect: () => void;
   disconnect: () => void;
   leaveToLobby: () => void;
+  destroyRoom: () => void;
   connected: boolean;
   reconnecting: boolean;
   createRoom: (roomName: string, password: string, playerName: string) => void;
@@ -67,6 +68,7 @@ interface MultiplayerContextValue {
   onBothReady: (cb: (decks: [unknown[], unknown[]]) => void) => void;
   onRestored: (cb: (hadState: boolean) => void) => void;
   onPlayerJoined: (cb: (data: { playerName: string }) => void) => void;
+  onRoomDestroyed: (cb: () => void) => void;
 }
 
 const MultiplayerContext = createContext<MultiplayerContextValue | null>(null);
@@ -95,6 +97,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const onBothReadyRef = useRef<((decks: [unknown[], unknown[]]) => void) | null>(null);
   const onRestoredRef = useRef<((hadState: boolean) => void) | null>(null);
   const onPlayerJoinedRef = useRef<((data: { playerName: string }) => void) | null>(null);
+  const onRoomDestroyedRef = useRef<(() => void) | null>(null);
 
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
 
@@ -195,6 +198,13 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       setChatMessages(prev => [...prev, msg]);
     });
 
+    s.on('room_destroyed', () => {
+      setRoomId(null);
+      setOpponentConnected(false);
+      localStorage.removeItem('pocket-tcg-room-id');
+      onRoomDestroyedRef.current?.();
+    });
+
     socketRef.current = s;
   }, []);
 
@@ -283,6 +293,16 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('pocket-tcg-room-id');
   }, []);
 
+  // ── Destruir sala (kick ambos) ──
+  const destroyRoom = useCallback(() => {
+    const s = socketRef.current;
+    const r = roomIdRef.current;
+    if (s && r) {
+      s.emit('destroy_room', { roomId: r });
+    }
+    // O evento room_destroyed vai limpar o state
+  }, []);
+
   // ── Desconectar de verdade ──
   const disconnect = useCallback(() => {
     const s = socketRef.current;
@@ -312,8 +332,12 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     onPlayerJoinedRef.current = cb;
   }, []);
 
+  const onRoomDestroyed = useCallback((cb: () => void) => {
+    onRoomDestroyedRef.current = cb;
+  }, []);
+
   const value: MultiplayerContextValue = {
-    connect, disconnect, leaveToLobby,
+    connect, disconnect, leaveToLobby, destroyRoom,
     connected, reconnecting,
     createRoom, joinRoom,
     roomId, playerIndex,
@@ -322,7 +346,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     submitDeck,
     syncState,
     chatMessages, sendChat,
-    onBothReady, onRestored, onPlayerJoined,
+    onBothReady, onRestored, onPlayerJoined, onRoomDestroyed,
   };
 
   return <MultiplayerContext.Provider value={value}>{children}</MultiplayerContext.Provider>;
